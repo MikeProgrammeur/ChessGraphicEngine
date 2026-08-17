@@ -1,9 +1,13 @@
+// SMFL INCLUDES
 #include <SFML/Graphics.hpp>
+#include <SFML/Window/Mouse.hpp>
+
+// MATHS INCLUDE
 #include <iostream>
-#include <algorithm>
 #include <vector>
 #include <array>
 
+// CONSTANTS DECLARATION
 #define HEIGHT 720
 #define WIDTH 1280
 
@@ -256,17 +260,34 @@ int plotTimerButtonsLost(sf::RenderWindow& window, int height, int width, std::a
     return 0;
 }
 
-int plotChessBoard(sf::RenderWindow& window, int width, int height, std::array<std::array<int, 8>, 8> chessboard, std::array<sf::Color, 2> colors, int pieceDim, std::array<sf::Texture, 12> chessTextures){
+std::array<int, 2> plotChessBoard(sf::RenderWindow& window, int width, int height, // Window params
+    std::array<std::array<int, 8>, 8> chessboard, // Chess board param
+    std::array<sf::Color, 2> colors, int pieceDim, std::array<sf::Texture, 12> chessTextures, // textures params
+    bool mouseLeftClicked, sf::Vector2i mousePosition) // Mouse params
+{
+    std::array<int, 2> mouseInGridLoc = {-1,-1}; // this variable is the returned one, it contains the coordinates (x,y) in the board €[0, 7]²u{-1}², if mouse is outside board we return {-1, -1}
     std::array<int, 8> casesSides = squareInScreen(height, width); // biggest square dimensions we can plot in the window
+    int squareSide = std::min(height, width);
     // the two next variables define the location of the top left corner of the current chess board case
     int currentIpos = 0;
     int currentJpos = 0;
+
+    bool mouseInCurrentSquare = false;
     for (int i = 0; i < 8; ++i) {
         int currentIlength = casesSides[i];
         currentJpos = 0;
         for (int j = 0; j < 8; ++j) {
-              
+            mouseInCurrentSquare = false;
             int currentJlength = casesSides[j];
+            // CHECK IF MOUSE IS IN THE CURRENT SQUARE (if so there will be change in square display)
+            if (mousePosition.y >= currentIpos &&
+                mousePosition.y < currentIpos + currentIlength &&
+                mousePosition.x >= currentJpos &&
+                mousePosition.x < currentJpos + currentJlength)
+            {
+                mouseInGridLoc = {i, j};
+                mouseInCurrentSquare = true;
+            }
 
             // PRINT THE BACKGROUND
             // Create the rectangle shape (Width <-> j, Height <-> i)
@@ -283,10 +304,17 @@ int plotChessBoard(sf::RenderWindow& window, int width, int height, std::array<s
             // PRINT THE CHESS PIECE
             if (chessboard[i][j] != 12){ // if case is not empty
                 sf::Sprite pieceSprite(chessTextures[chessboard[i][j]]);
-                pieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos), static_cast<float>(currentIpos)));
-                
-                pieceSprite.setScale(sf::Vector2f(currentJlength/static_cast<float>(pieceDim), currentIlength/static_cast<float>(pieceDim)));
 
+                if (mouseInCurrentSquare){ // scale up the piece if hovered
+                    pieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos) - 0.05 * currentJlength , static_cast<float>(currentIpos) - 0.05 * currentIlength));
+                    // this strange 0.05 is simply (1.1-1)/2, we ensure to recenter piece in the square when scaling it up, if not done the scaling will be in the right and bottom directions
+                    pieceSprite.setScale(sf::Vector2f(1.1*currentJlength/static_cast<float>(pieceDim), 1.1*currentIlength/static_cast<float>(pieceDim)));
+                    // pieces are 14x14 pixels maximum in a 16x16 texture image, so if we scale it by 1.1 there will be no leak in the surrounding squares, 1.1*14/16 < 1
+                }
+                else{
+                    pieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos), static_cast<float>(currentIpos)));
+                    pieceSprite.setScale(sf::Vector2f(currentJlength/static_cast<float>(pieceDim), currentIlength/static_cast<float>(pieceDim)));
+                }
                 window.draw(pieceSprite);
             }
 
@@ -294,7 +322,7 @@ int plotChessBoard(sf::RenderWindow& window, int width, int height, std::array<s
         }
         currentIpos += currentIlength;
     }
-    return 0; 
+    return mouseInGridLoc; 
 }
 
 int main()
@@ -339,14 +367,6 @@ int main()
     sf::RenderWindow window(sf::VideoMode({WIDTH, HEIGHT}), "Chess Board");
     window.clear(sf::Color(0xEBECD0FF));
 
-    // // [1] DISPLAY THE GRID
-    int plotChessBoardWorked = plotChessBoard(window, WIDTH, HEIGHT, chessboard, colors , 16, chessTextures);
-
-    // [2] DISPLAY THE SIDE-GUI (eated pieces, button and clock)
-    int plotGuiWorked = plotTimerButtonsLost(window, HEIGHT, WIDTH, eated_black, eated_white, secLeftBlack, secLeftWhite, gameState, chessTextures, buttonTextures, clockTextures); // for the moment no clock displayed secLeftBlack and secLeftWhite are thus useless
-    
-    // [3] UPDATE SCREEN
-    window.display();
 
     while (window.isOpen())
     {
@@ -355,8 +375,23 @@ int main()
             if (event->is<sf::Event::Closed>())
                 window.close();
         }
+        // [0] RESET WINDOWS
+        window.clear(sf::Color(0xEBECD0FF));
 
-        //window.display();
+        // [1] GETTING THE USER INPUT
+        bool mouseLeftClicked = (sf::Mouse::isButtonPressed(sf::Mouse::Button::Left));
+        sf::Vector2i mousePosition = sf::Mouse::getPosition(window); // get in screen mouse position
+
+        // // [2] DISPLAY THE GRID
+        std::array<int, 2> mouseInGridLoc = plotChessBoard(window, WIDTH, HEIGHT, chessboard, colors , 16, chessTextures, mouseLeftClicked, mousePosition);
+        // mouseInGridLoc is (x,y) y positive is toward bottom
+
+        // [3] DISPLAY THE SIDE-GUI (eated pieces, button and clock)
+        int plotGuiWorked = plotTimerButtonsLost(window, HEIGHT, WIDTH, eated_black, eated_white, secLeftBlack, secLeftWhite, gameState, chessTextures, buttonTextures, clockTextures); // for the moment no clock displayed secLeftBlack and secLeftWhite are thus useless
+        
+        // [4] UPDATE SCREEN
+        window.display();
+        std::cout << "left click : " << mouseLeftClicked << " and mouse global position : " << mousePosition.x << ", " <<mousePosition.y << " and mouse in grid location :" << mouseInGridLoc[0] << ", " << mouseInGridLoc[1]<< std::endl;
     }
 }
 
