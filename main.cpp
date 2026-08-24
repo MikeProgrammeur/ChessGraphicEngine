@@ -43,10 +43,6 @@ bool gameState = true;
 
 // END OF FAKE GAME DESCRIPTION
 
-void printArrayFour(std::array<int, 4> ar){
-    std::cout << static_cast<int>(ar[0]) << " " << static_cast<int>(ar[1]) << " " << static_cast<int>(ar[2]) << " " << static_cast<int>(ar[3]) << std::endl;
-}
-
 bool twoIntsArrayCheck(std::array<int, 2> ar1, std::array<int, 2> ar2){ return ((ar1[0]==ar2[0])&&(ar1[1]==ar2[1]));}
 
 bool isHorizontal(int height, int width)
@@ -54,9 +50,8 @@ bool isHorizontal(int height, int width)
     return (width > height);
 }
 
-std::array<int, 8> squareInScreen(int height, int width)
+std::array<int, 8> squareInScreen(int squareSide)
 {
-    int squareSide = std::min(height, width);
     auto dv = std::div(squareSide, 8);
     std::array<int, 8> result;
     for (int i = 0; i < 8; ++i) {
@@ -91,7 +86,7 @@ std::array<int, 4> centerPlot(std::array<int, 4> windowProperties, int imageHeig
     float borderMultiplier = 1.0 - 2.0 * std::min(std::max(borderInPercent, static_cast<float>(0.0)), static_cast<float>(50.0)) / 100; // we ensure border to be positive so image is not bigger than the window, and smaller than 50% so there is still space for image
 
     float alpha = std::min(borderMultiplier * static_cast<float>(windowProperties[2]) / imageHeight, borderMultiplier * static_cast<float>(windowProperties[3]) / imageWidth );
-    std::array<int, 4> result = {0, 0, imageHeight * alpha, imageWidth * alpha};
+    std::array<int, 4> result = {0, 0, static_cast<int>(imageHeight * alpha), static_cast<int>(imageWidth * alpha)};
     result[0] = windowProperties[0] + (windowProperties[2] - result[2])/2; // top left height
     result[1] = windowProperties[1] + (windowProperties[3] - result[3])/2; // top left width
     return result;
@@ -181,7 +176,7 @@ int plotClock(sf::RenderWindow& window, int secLeft, std::array<int, 4> clockAre
     return 0;
 }
 
-std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width, // Window params
+std::string plotTimerButtonsLost(sf::RenderWindow& window,std::array<int, 4> widgetsAreaProperties, bool isHorizontalVar, // Window params
     std::array<int, 6> eated_black, std::array<int, 6> eated_white, int secLeftBlack, int secLeftWhite, // Display params
     bool* gameStatePtr, std::array<sf::Texture, 12> chessTextures, std::array<sf::Texture, 4> buttonTextures, std::array<sf::Texture, 12> clockTextures, // Textures params
     bool mouseLeftClicked, sf::Vector2i mousePosition) // Mouse params
@@ -192,8 +187,6 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
     // gameState is True iff not paused
 
     std::string uciRequest = ""; // by default if nothing is clicked return empty string
-
-    std::array<int, 4> leftSpaceVar = leftSpace(height, width); // blank space : (top left height, top left width, height, width)
     // first we define all the sizes of the sprites in pixels so we can compute all the scaling factors later
     // 1ST ROW:
     int eatedWhiteImageHeight = 16;
@@ -212,10 +205,10 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
     int eatedBlackImageHeight = 16;
     int eatedBlackImageMaximalWidth = 8.5 * eatedBlackImageHeight;
     int eatedBlackImageWidth = computeEatedWidth(eated_black, eatedBlackImageHeight);
-    if (isHorizontal(height, width)){
-        int dividedHeight = leftSpaceVar[2]/7;
+    if (isHorizontalVar){
+        int dividedHeight = widgetsAreaProperties[2]/7;
         // 1ST ROW: Eated White Pieces
-        std::array<int, 4> whitePiecesAreaProperties = {0, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> whitePiecesAreaProperties = {0, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         // to compute the area we use the maximal width of eated pieces, so piece sizes are consistant during the game, but we plot at computed width so the pieces starts always at the same place
         std::array<int, 4> centeredWhitePiecesAreaProperties = centerPlot(whitePiecesAreaProperties, eatedWhiteImageHeight, eatedWhiteImageMaximalWidth, 0);
         centeredWhitePiecesAreaProperties[3] =
@@ -227,12 +220,12 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
         int plotWhiteEatedWorked = plotEated(window, eated_white, centeredWhitePiecesAreaProperties, true, eatedWhiteImageHeight, chessTextures);
 
         // 2ND ROW: Black Timer
-        std::array<int, 4> blackTimerAreaProperties = {dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> blackTimerAreaProperties = {dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredBlackTimerAreaProperties = centerPlot(blackTimerAreaProperties, timerHeight, timerWidth, 2);
         int plotTimerBlackWorked = plotClock(window, secLeftBlack, centeredBlackTimerAreaProperties, timerHeight, clockTextures);
 
         // 3RD ROW: Pause Button
-        std::array<int, 4> pauseAreaProperties = {2 * dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> pauseAreaProperties = {2 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredPlayPauseButtonProperties = centerPlot(pauseAreaProperties, buttonImageHeight, buttonImageWidth,5);
         sf::Sprite playPauseSprite(buttonTextures[0]); // by default we load "pause" texture
         if (!(*gameStatePtr)) { // if game is not playing we load "play" texture
@@ -254,7 +247,7 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
         window.draw(playPauseSprite);
 
         // 4TH ROW: Screenshot Button
-        std::array<int, 4> snapAreaProperties = {3 * dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> snapAreaProperties = {3 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredSnapButtonProperties = centerPlot(snapAreaProperties, buttonImageHeight, buttonImageWidth,5);
         sf::Sprite snapSprite(buttonTextures[2]);
         snapSprite.setPosition(sf::Vector2f(static_cast<float>(centeredSnapButtonProperties[1]), static_cast<float>(centeredSnapButtonProperties[0]))); 
@@ -275,7 +268,7 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
         window.draw(snapSprite);
 
         // 5TH ROW: Reset Button
-        std::array<int, 4> resetAreaProperties = {4 * dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> resetAreaProperties = {4 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredResetButtonProperties = centerPlot(resetAreaProperties, buttonImageHeight, buttonImageWidth, 5);
         sf::Sprite resetSprite(buttonTextures[3]);
         resetSprite.setPosition(sf::Vector2f(static_cast<float>(centeredResetButtonProperties[1]), static_cast<float>(centeredResetButtonProperties[0]))); 
@@ -292,12 +285,12 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
         window.draw(resetSprite);
 
         // 6TH ROW: White Timer
-        std::array<int, 4> whiteTimerAreaProperties = {5 * dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> whiteTimerAreaProperties = {5 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredWhiteTimerAreaProperties = centerPlot(whiteTimerAreaProperties, timerHeight, timerWidth, 2);
         int plotTimerWhiteWorked = plotClock(window, secLeftWhite, centeredWhiteTimerAreaProperties, timerHeight, clockTextures);
 
         // 7TH ROW: Eated Black Pieces
-        std::array<int, 4> blackPiecesAreaProperties = {6 * dividedHeight, leftSpaceVar[1], dividedHeight, leftSpaceVar[3]};
+        std::array<int, 4> blackPiecesAreaProperties = {6 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
         std::array<int, 4> centeredBlackPiecesAreaProperties = centerPlot(blackPiecesAreaProperties, eatedBlackImageHeight, eatedBlackImageMaximalWidth, 0);
         centeredBlackPiecesAreaProperties[3] =
             static_cast<int>(
@@ -310,14 +303,13 @@ std::string plotTimerButtonsLost(sf::RenderWindow& window, int height, int width
     return uciRequest;
 }
 
-std::array<int, 2> plotChessBoard(sf::RenderWindow& window, int width, int height, // Window params
+std::array<int, 2> plotChessBoard(sf::RenderWindow& window, std::array<int, 4> boardAreaProperties, // Window params
     std::array<std::array<int, 8>, 8> chessboard, std::array<int, 2> selectedSquare, int elapsedSinceLaunchMilli, // Chess board param
     std::array<sf::Color, 2> colors, int pieceDim, std::array<sf::Texture, 12> chessTextures, std::array<sf::Texture, 2> selectedTexture,// textures params
     bool mouseLeftClicked, sf::Vector2i mousePosition) // Mouse params
 {
     std::array<int, 2> mouseInGridLoc = {-1,-1}; // this variable is the returned one, it contains the coordinates (x,y) in the board €[0, 7]²u{-1}², if mouse is outside board we return {-1, -1}
-    std::array<int, 8> casesSides = squareInScreen(height, width); // biggest square dimensions we can plot in the window
-    int squareSide = std::min(height, width);
+    std::array<int, 8> casesSides = squareInScreen(boardAreaProperties[2]); // biggest square dimensions we can plot in the area (we give the width(=height) of the board area)
     // the two next variables define the location of the top left corner of the current chess board case
     int currentIpos = 0;
     int currentJpos = 0;
@@ -381,6 +373,26 @@ std::array<int, 2> plotChessBoard(sf::RenderWindow& window, int width, int heigh
     return mouseInGridLoc; 
 }
 
+void plotTerminal(sf::RenderWindow& window, std::array<int, 4> terminalAreaProperties,
+    std::string command,
+    sf::Font myFont){
+    // BLACK BACKGROUND
+    sf::RectangleShape terminalRect(sf::Vector2f(static_cast<float>(terminalAreaProperties[3]), static_cast<float>(terminalAreaProperties[2])));
+    terminalRect.setFillColor(sf::Color{0x000000FF}); // case color
+    terminalRect.setPosition(sf::Vector2f(static_cast<float>(terminalAreaProperties[1]), static_cast<float>(terminalAreaProperties[0])));  
+    window.draw(terminalRect);
+
+    // TEXT
+    int fontHeight = static_cast<int>(0.80 * terminalAreaProperties[2]);
+    int fontMargin = (terminalAreaProperties[2] - fontHeight)/2;
+
+    sf::Text text(myFont, command, fontHeight);
+
+    text.setFillColor(sf::Color(31, 255, 0));
+    text.setPosition(sf::Vector2f(static_cast<float>(terminalAreaProperties[1] + fontMargin), static_cast<float>(terminalAreaProperties[0]) + fontMargin));
+    window.draw(text);
+}
+
 int main()
 {
     //Loading all the textures : 
@@ -422,10 +434,39 @@ int main()
     selectedTexture[0].loadFromFile("./Assets/Pieces/SelectedWhiteSquare.png");
     selectedTexture[1].loadFromFile("./Assets/Pieces/SelectedBlackSquare.png");
 
-    std::array<sf::Color, 2> colors = {sf::Color{0xEBECD0FF}, sf::Color{0x779556FF}}; // white and black chess cases
+    std::array<sf::Color, 2> colors = {sf::Color{0xEBECD0FF}, sf::Color{0x779556FF}}; // white and black chess squares colors RGB hex code
 
+    sf::Font myFont;
+    bool fontLoadedBool = myFont.openFromFile("./Assets/Font/arial.ttf");
+    if (!fontLoadedBool)
+    {
+        std::cout << "WARNING THE FONT CAN NOT BE FIND AN ERROR HAS OCCURED DURING LOADING" << std::endl;
+    }
+
+
+    // - Window configuration
     sf::RenderWindow window(sf::VideoMode({WIDTH, HEIGHT}), "Chess Board");
+    window.setFramerateLimit(30);
     window.clear(sf::Color(0xEBECD0FF));
+    // -- Define if screen will be vertical or horizontal
+    bool isScreenHorizontal = isHorizontal(HEIGHT, WIDTH);
+    // -- Split screen according to its shape
+    std::array<int, 4> boardAreaProperties;
+    std::array<int, 4> terminalAreaProperties;
+    std::array<int, 4> widgetsAreaProperties;
+    if (isScreenHorizontal){ // for better understanding look at "screenWidgetPlacement.txt"
+        int boardSide = static_cast<int>(0.95 * HEIGHT);
+        boardAreaProperties = {0, 0, boardSide, boardSide}; // (y, x, h, w)
+        terminalAreaProperties = {boardSide, 0, HEIGHT - boardSide, boardSide};
+        widgetsAreaProperties = {0, boardSide,  HEIGHT, WIDTH - boardSide};
+    }
+    else {
+        int eigthOfLeftHeight = static_cast<int>(0.125 * (HEIGHT - WIDTH));
+        boardAreaProperties = {0, 0, WIDTH, WIDTH}; // (y, x, h, w)
+        terminalAreaProperties = {WIDTH, 0, eigthOfLeftHeight, WIDTH};
+        widgetsAreaProperties = {WIDTH + eigthOfLeftHeight, 0,  HEIGHT - eigthOfLeftHeight - WIDTH, WIDTH};
+    }
+
 
     // Variables init
     bool mouseLeftPressed = false;
@@ -435,6 +476,7 @@ int main()
 
     std::array<int, 2> selectedSquare = {-1,-1};
 
+    std::string terminalLog = "> Hello world!";
     std::string uciRequest = "";
     std::string uciRequestButtons = "";
     std::string uciRequestBoard = "";
@@ -456,10 +498,15 @@ int main()
         // raising edge detection is max(0, f'(x)) and falling edge max(0, -f'(x)) but here we express it with boolean and a memory
         sf::Vector2i mousePosition = sf::Mouse::getPosition(window); // get in screen mouse position
 
-        // // [2] DISPLAY THE GRID
+        // [2] DISPLAY THE TERMINAL
+        if (fontLoadedBool) {
+            plotTerminal(window, terminalAreaProperties, terminalLog, myFont);
+        }
+
+        // [2] DISPLAY THE GRID
         sf::Time elapsedSinceLaunch = clock.getElapsedTime(); // we compute elapsed time and pass it for chessboard display
         int elapsedSinceLaunchMilli = 2 * elapsedSinceLaunch.asMilliseconds(); // we can multiply to make it flicker faster, if no multiplier -> flicker every sec, if multiplied by 3 -> flicker 3 times per sec
-        std::array<int, 2> mouseInGridLoc = plotChessBoard(window, WIDTH, HEIGHT, chessboard, selectedSquare, elapsedSinceLaunchMilli, colors , 16, chessTextures, selectedTexture, mouseLeftClicked, mousePosition);
+        std::array<int, 2> mouseInGridLoc = plotChessBoard(window, boardAreaProperties, chessboard, selectedSquare, elapsedSinceLaunchMilli, colors, 16, chessTextures, selectedTexture, mouseLeftClicked, mousePosition);
         // mouseInGridLoc is (x,y) y positive is toward bottom
         // now we will use this to update game, if mouse pressed and cliked square is different of the selected one we set a uci request for the movement else if it is the same, we unselect the square, else if clicked on {-1,-1} do nothing
         uciRequestBoard = "";
@@ -482,12 +529,12 @@ int main()
         }
 
         // [3] DISPLAY THE SIDE-GUI (eated pieces, button and clock)
-        uciRequestButtons = plotTimerButtonsLost(window, HEIGHT, WIDTH, eated_black, eated_white, secLeftBlack, secLeftWhite, &gameState, chessTextures, buttonTextures, clockTextures, mouseLeftClicked, mousePosition); // for the moment no clock displayed secLeftBlack and secLeftWhite are thus useless
+        uciRequestButtons = plotTimerButtonsLost(window, widgetsAreaProperties, isScreenHorizontal, eated_black, eated_white, secLeftBlack, secLeftWhite, &gameState, chessTextures, buttonTextures, clockTextures, mouseLeftClicked, mousePosition); // for the moment no clock displayed secLeftBlack and secLeftWhite are thus useless
         
         // [4] UPDATE SCREEN
         window.display();
         // std::cout << "left click : " << mouseLeftClicked << " and mouse global position : " << mousePosition.x << ", " <<mousePosition.y << " and mouse in grid location :" << mouseInGridLoc[0] << ", " << mouseInGridLoc[1]<< std::endl;
-        std::cout << uciRequest << std::endl;
+        if (uciRequest != "") std::cout << uciRequest << std::endl;
 
         // [5] CALL THE CHESS ENGINE IF THERE IS AN USER INPUT
         if (uciRequestBoard != ""){
@@ -497,8 +544,11 @@ int main()
             uciRequest = uciRequestButtons;
         }
 
+        if (uciRequest != ""){
+            terminalLog = "client > " + uciRequest;
+        }
+
         // Here : Have Fun with the Lib
     
     }
 }
-
