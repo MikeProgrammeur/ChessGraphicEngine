@@ -1,3 +1,9 @@
-/main.exe
-/main.o
-./ScreenShots/*
+# Object files
+*.o
+*.obj
+
+# Exec and binary files
+*.exe
+*.out
+*.app
+main

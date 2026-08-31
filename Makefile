@@ -1,44 +1,83 @@
-# --- Variables ---
-# On utilise CXX pour le C++ (CC est traditionnellement réservé au C)
+# ===========================================================================
+#  Chess — cross-platform Makefile (macOS / Linux / Windows)
+# ===========================================================================
+
+# --- OS detection ---
+UNAME_S := $(shell uname -s)
+
+ifeq ($(OS),Windows_NT)
+    OS_GROUP := windows
+else
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Darwin)
+        OS_GROUP := macos
+    else
+        OS_GROUP := linux
+    endif
+endif
+
+# --- Source files ---
+SOURCES = main.cpp textures.cpp layout.cpp rendering.cpp engine.cpp
+OBJECTS = $(SOURCES:.cpp=.o)
+
 CXX = g++
 
-# Options de compilation (On active les avertissements de base)
-CXXFLAGS = -Wall -Wextra -O2
+# --- Common flags ---
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2
 
-# Bibliothèques à lier (L'ordre est très important pour SFML !)
-LDLIBS = -lsfml-graphics -lsfml-window -lsfml-system
+# ===========================================================================
+#  Windows (MinGW-w64)
+# ===========================================================================
+ifeq ($(OS_GROUP),windows)
+    SFML_DIR ?= C:/SFML-3.1.0
+    TARGET = main.exe
+    CXXFLAGS += -I$(SFML_DIR)/include
+    LDFLAGS = -L$(SFML_DIR)/lib -static-libgcc -static-libstdc++
+    LDLIBS = -lsfml-graphics -lsfml-window -lsfml-system -lsfml-audio
+    LDLIBS += -lgdi32 -lwinmm
+    RM = del /Q
+    MKDIR_P = if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
+endif
 
-SOURCES = main.cpp
-# On remplace .cpp par .o (et non .c par .o)
-OBJECTS = $(SOURCES:.cpp=.o)
-TARGET = main.exe
+# ===========================================================================
+#  macOS
+# ===========================================================================
+ifeq ($(OS_GROUP),macos)
+    SFML_DIR ?= /Users/arch/Downloads/SFML-3.1.0
+    TARGET = main
+    CXXFLAGS += -I$(SFML_DIR)/include
+    LDFLAGS = -L$(SFML_DIR)/lib -Wl,-rpath,$(SFML_DIR)/lib
+    LDLIBS = -lsfml-graphics -lsfml-window -lsfml-system -lsfml-audio
+    RM = rm -f
+endif
 
-# --- Règles ---
+# ===========================================================================
+#  Linux
+# ===========================================================================
+ifeq ($(OS_GROUP),linux)
+    SFML_DIR ?= /usr/local
+    TARGET = main
+    CXXFLAGS += -I$(SFML_DIR)/include
+    LDFLAGS = -L$(SFML_DIR)/lib -Wl,-rpath,$(SFML_DIR)/lib
+    LDLIBS = -lsfml-graphics -lsfml-window -lsfml-system -lsfml-audio
+    RM = rm -f
+endif
 
-# Règle par défaut
+# --- Rules ---
 all: $(TARGET)
 
-# 1. Lien de l'exécutable (Assemblage final)
-# $@ -> $(TARGET)
-# $^ -> $(OBJECTS)
 $(TARGET): $(OBJECTS)
-	$(CXX) -o $@ $^ $(LDLIBS)
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# 2. Compilation des fichiers .cpp en .o
-# $< -> Premier prérequis (le fichier .cpp)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Déclaration des cibles phony
 .PHONY: all clean fclean re
 
-# Nettoyage des fichiers objets
 clean:
-	rm -f $(OBJECTS)
+	$(RM) $(OBJECTS)
 
-# Nettoyage complet (fichiers objets et exécutable)
 fclean: clean
-	rm -f $(TARGET) $(TARGET).exe
+	$(RM) $(TARGET)
 
-# Refaire la compilation
 re: fclean all

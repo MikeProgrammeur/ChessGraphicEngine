@@ -1,554 +1,736 @@
-// SMFL INCLUDES
-#include <SFML/Graphics.hpp>
-#include <SFML/Window/Mouse.hpp>
-
-// MATHS INCLUDE
 #include <iostream>
-#include <vector>
-#include <array>
-#include <cmath>
-
-// TYPES INCLUDE
 #include <string>
+#include <vector>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <csignal>
+#include <array>
+#include <ctime>
 
-// CONSTANTS DECLARATION
-#define HEIGHT 720
-#define WIDTH 1280
+#include <SFML/Graphics.hpp>
+#include <SFML/Audio.hpp>
 
-// FAKE GAME DESCRIPTION (THOSE SHOULD BE THE DATA GIVEN TO THE MAIN FUNCTION OF MY LIBRARY)
+#include "constants.hpp"
+#include "types.hpp"
+#include "textures.hpp"
+#include "rendering.hpp"
+#include "layout.hpp"
+#include "engine.hpp"
 
-std::array<std::array<int, 8>, 8> chessboard = 
-    {{{1, 2, 3, 4, 5, 3, 2, 1},
+// ---------------------------------------------------------------------------
+// Starting position
+// ---------------------------------------------------------------------------
+
+static const Board INITIAL_BOARD = {{
+    {1, 2, 3, 4, 5, 3, 2, 1},
     {0, 0, 0, 0, 0, 0, 0, 0},
     {12, 12, 12, 12, 12, 12, 12, 12},
     {12, 12, 12, 12, 12, 12, 12, 12},
     {12, 12, 12, 12, 12, 12, 12, 12},
     {12, 12, 12, 12, 12, 12, 12, 12},
     {6, 6, 6, 6, 6, 6, 6, 6},
-    {7, 8, 9, 10, 11, 9, 8, 7}}};
+    {7, 8, 9, 10, 11, 9, 8, 7}
+}};
 
-/*  
-    0: black pawn 1: black rook 2: black knight 3: black bishop 4: black queen 5: black king
-    6: white pawn 7: white rook 8: white knight 9: white bishop 10: white queen 11: white king 
-    12: empty
-*/
+// GUI ↔ UCI conversion
+// GUI move: "{row1}_{col1}_to_{row2}_{col2}" (row 0 = rank 8, col 0 = file a)
+// UCI move: "e2e4" (file letter + rank digit)
+static std::string guiMoveToUCI(const std::string& guiMove, const Board& board) {
+    int r1, c1, r2, c2;
+    if (std::sscanf(guiMove.c_str(), "%d_%d_to_%d_%d", &r1, &c1, &r2, &c2) != 4)
+        return "";
 
-std::array<int, 6> eated_black = {8, 2, 2, 2, 1, 1};
-std::array<int, 6> eated_white = {1, 1, 1, 1, 1, 1};
+    char uci[6];
+    uci[0] = static_cast<char>('a' + c1);
+    uci[1] = static_cast<char>('1' + (7 - r1));
+    uci[2] = static_cast<char>('a' + c2);
+    uci[3] = static_cast<char>('1' + (7 - r2));
 
-int secLeftBlack = 60;
-int secLeftWhite = 121;
-
-bool gameState = true;
-
-// END OF FAKE GAME DESCRIPTION
-
-bool twoIntsArrayCheck(std::array<int, 2> ar1, std::array<int, 2> ar2){ return ((ar1[0]==ar2[0])&&(ar1[1]==ar2[1]));}
-
-bool isHorizontal(int height, int width)
-{
-    return (width > height);
+    // Auto-promote to queen if a pawn reaches the last rank
+    int piece = board[r1][c1];
+    bool reachesLastRank = (piece == 6 && r2 == 0) || (piece == 0 && r2 == 7);
+    if (reachesLastRank) {
+        uci[4] = 'q';
+        uci[5] = '\0';
+    } else {
+        uci[4] = '\0';
+    }
+    return std::string(uci);
 }
 
-std::array<int, 8> squareInScreen(int squareSide)
-{
-    auto dv = std::div(squareSide, 8);
-    std::array<int, 8> result;
-    for (int i = 0; i < 8; ++i) {
-        result[i] = (i < dv.rem) ? (dv.quot + 1) : dv.quot;
+// Apply a UCI move to the board (handles castling, en passant, promotion)
+static void applyUCIMove(Board& board, const std::string& uci,
+                         CapturedPieces& capturedWhite, CapturedPieces& capturedBlack) {
+    if (uci.length() < 4) return;
+
+    int c1 = uci[0] - 'a';
+    int r1 = 7 - (uci[1] - '1');
+    int c2 = uci[2] - 'a';
+    int r2 = 7 - (uci[3] - '1');
+
+    int piece = board[r1][c1];
+    int target = board[r2][c2];
+    bool isWhite = (piece >= 6 && piece <= 11);
+
+    // --- En passant: pawn diagonal to empty square ---
+    bool isPawn = (piece == 0 || piece == 6);
+    bool isEnPassant = isPawn && target == EMPTY_SQUARE && (c1 != c2);
+    if (isEnPassant) {
+        int captured = board[r1][c2];
+        board[r1][c2] = EMPTY_SQUARE;
+        if (isWhite && captured < 6)              capturedBlack[captured]++;
+        else if (!isWhite && captured >= 6)       capturedWhite[captured - 6]++;
+    } else if (target != EMPTY_SQUARE) {
+        // --- Normal capture ---
+        if (isWhite && target < 6)                capturedBlack[target]++;
+        else if (!isWhite && target >= 6)         capturedWhite[target - 6]++;
     }
-    return result;
-} // CORRECT
 
-std::array<int, 4> leftSpace(int height, int width)
-{
-    std::array<int, 4> result; // Create an array of size 4 composed of (leftSpace top left height, leftSpace top left width, leftSpace size height, leftSpace size width)
-    int squareSide = std::min(height, width);
-    if (isHorizontal(height, width)){ // if horizontal window free area for gui is at the right of the board
-        result[0] = 0;
-        result[1] = squareSide;
-        result[2] = height;
-        result[3] = width - squareSide;
-    }
-    else{ // if vertical window free area for gui is under the board
-        result[0] = squareSide;
-        result[1] = 0;
-        result[2] = height - squareSide;
-        result[3] = width;
-    }
-    return result;
-} // CORRECT
-
-
-std::array<int, 4> centerPlot(std::array<int, 4> windowProperties, int imageHeight, int imageWidth, float borderInPercent){ // windowProperties = (top left height, top left width, height, width)
-    // returns also (top left height, top left width, height, width)
-    // i added the possibility to leave a free space around the sprite, we express it in percent of the dimensions, so for border = 5%, we now that image cant occupy more than 90% of the height and 90% of the width
-    float borderMultiplier = 1.0 - 2.0 * std::min(std::max(borderInPercent, static_cast<float>(0.0)), static_cast<float>(50.0)) / 100; // we ensure border to be positive so image is not bigger than the window, and smaller than 50% so there is still space for image
-
-    float alpha = std::min(borderMultiplier * static_cast<float>(windowProperties[2]) / imageHeight, borderMultiplier * static_cast<float>(windowProperties[3]) / imageWidth );
-    std::array<int, 4> result = {0, 0, static_cast<int>(imageHeight * alpha), static_cast<int>(imageWidth * alpha)};
-    result[0] = windowProperties[0] + (windowProperties[2] - result[2])/2; // top left height
-    result[1] = windowProperties[1] + (windowProperties[3] - result[3])/2; // top left width
-    return result;
-} // CORRECT 
-
-int computeEatedWidth(std::array<int, 6> eated, int pieceDim){
-    // we plot each eated piece, if they are of the same type we overlap them by 75% this explains the result : sum (i s.t. eated[i]>0) ((eated[i]-1) * pieceDim/4 + pieceDim) 
-    // can be simplified into sum (i s.t. eated[i]>0) pieceDim * (1 + (eated[i]-1) / 4 ) 
-    float result = 0.0;
-    for (int i = 0; i < 6; ++i){
-        if (eated[i]>0){
-            result += (1 + (static_cast<float>(eated[i]) - 1) / 4);
+    // --- Castling: king moves 2 squares horizontally ---
+    bool isKing = (piece == 5 || piece == 11);
+    if (isKing && std::abs(c2 - c1) == 2) {
+        if (c2 > c1) { // Kingside
+            board[r1][5] = board[r1][7];
+            board[r1][7] = EMPTY_SQUARE;
+        } else {       // Queenside
+            board[r1][3] = board[r1][0];
+            board[r1][0] = EMPTY_SQUARE;
         }
     }
-    return pieceDim * result;
-} // CORRECT
 
-bool checkMouseInBounds(sf::Vector2i mousePosition, std::array<int, 4> detectionAreaProperties){
-    // mousePosition has x and y attributes and detectionAreaProperties is like (top left height, top left width, height, width)
-    return (mousePosition.y >= detectionAreaProperties[0] &&
-                mousePosition.y < detectionAreaProperties[0] + detectionAreaProperties[2] &&
-                mousePosition.x >= detectionAreaProperties[1] &&
-                mousePosition.x < detectionAreaProperties[1] + detectionAreaProperties[3]);
+    // --- Promotion ---
+    if (uci.length() > 4) {
+        switch (uci[4]) {
+            case 'q': piece = isWhite ? 10 : 4;  break;
+            case 'r': piece = isWhite ?  7 : 1;  break;
+            case 'b': piece = isWhite ?  9 : 3;  break;
+            case 'n': piece = isWhite ?  8 : 2;  break;
+        }
+    }
+
+    board[r2][c2] = piece;
+    board[r1][c1] = EMPTY_SQUARE;
 }
 
-int plotEated(sf::RenderWindow& window, std::array<int, 6> eated, std::array<int, 4> eatedAreaProperties, bool white, int pieceDim, std::array<sf::Texture, 12> chessTextures){    
-    // we have access to std::array<sf::Texture, 12> chessTextures and we need to plot all the eated pieces using a loop
-    // indices for black are 0,1,2,3,4,5 and for white pieces 6,7,8,9,10,11 that is why we define an offset of 6 so we can automatically pick the wong color
-    int colorOffset = white * 6;
-    int currentPieceTopLeftCornerXpos = eatedAreaProperties[1] + eatedAreaProperties[3] - eatedAreaProperties[2]; // Xpos (top left corner x coord) + W (area for plot width) - H (area for plot height <-> piece height)
-    for (int i = 5; i > -1; --i) { // start at the last piece so the pieces look stacked up like in chess.com
-        sf::Sprite currentPieceSprite(chessTextures[i+colorOffset]); 
-        for (int j = 1; j <= eated[i]; ++j) { // we repeat plot 
-            currentPieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentPieceTopLeftCornerXpos), static_cast<float>(eatedAreaProperties[0])));
-            float scale = static_cast<float>(eatedAreaProperties[2]) / static_cast<float>(pieceDim);
-            currentPieceSprite.setScale(sf::Vector2f(scale, scale));
-            window.draw(currentPieceSprite);
-            if (j < eated[i]) { // shift by 25% only if next piece is the same type
-                currentPieceTopLeftCornerXpos -= eatedAreaProperties[2] / 4; // we overlap same pieces by 25%
+// Chess rules: check / checkmate detection
+static bool isWhitePiece(int p) { return p >= 6 && p <= 11; }
+static bool isBlackPiece(int p) { return p >= 0 && p <= 5; }
+
+static bool inBounds(int r, int c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
+
+// Is square (r,c) attacked by `byWhite` pieces?
+static bool isSquareAttacked(const Board& b, int r, int c, bool byWhite) {
+    // Knight attacks
+    static const int knightDr[] = {-2,-2,-1,-1, 1, 1, 2, 2};
+    static const int knightDc[] = {-1, 1,-2, 2,-2, 2,-1, 1};
+    for (int d = 0; d < 8; ++d) {
+        int nr = r + knightDr[d], nc = c + knightDc[d];
+        if (!inBounds(nr, nc)) continue;
+        int p = b[nr][nc];
+        if (byWhite && p == 8) return true;
+        if (!byWhite && p == 2) return true;
+    }
+
+    // Pawn attacks
+    int pawnDir = byWhite ? 1 : -1;
+    int pawnId   = byWhite ? 6 : 0;
+    for (int dc = -1; dc <= 1; dc += 2) {
+        int pr = r + pawnDir, pc = c + dc;
+        if (inBounds(pr, pc) && b[pr][pc] == pawnId) return true;
+    }
+
+    // Sliding: rook/queen on straight lines
+    static const int straightDr[] = {-1, 1, 0, 0};
+    static const int straightDc[] = {0, 0, -1, 1};
+    for (int d = 0; d < 4; ++d) {
+        for (int dist = 1; dist < 8; ++dist) {
+            int nr = r + straightDr[d]*dist, nc = c + straightDc[d]*dist;
+            if (!inBounds(nr, nc)) break;
+            int p = b[nr][nc];
+            if (p == EMPTY_SQUARE) continue;
+            if (byWhite && (p == 7 || p == 10)) return true;
+            if (!byWhite && (p == 1 || p == 4)) return true;
+            break;
+        }
+    }
+
+    // Sliding: bishop/queen on diagonals
+    static const int diagDr[] = {-1,-1, 1, 1};
+    static const int diagDc[] = {-1, 1,-1, 1};
+    for (int d = 0; d < 4; ++d) {
+        for (int dist = 1; dist < 8; ++dist) {
+            int nr = r + diagDr[d]*dist, nc = c + diagDc[d]*dist;
+            if (!inBounds(nr, nc)) break;
+            int p = b[nr][nc];
+            if (p == EMPTY_SQUARE) continue;
+            if (byWhite && (p == 9 || p == 10)) return true;
+            if (!byWhite && (p == 3 || p == 4)) return true;
+            break;
+        }
+    }
+
+    // King attacks
+    static const int kingDr[] = {-1,-1,-1, 0, 0, 1, 1, 1};
+    static const int kingDc[] = {-1, 0, 1,-1, 1,-1, 0, 1};
+    for (int d = 0; d < 8; ++d) {
+        int nr = r + kingDr[d], nc = c + kingDc[d];
+        if (!inBounds(nr, nc)) continue;
+        int p = b[nr][nc];
+        if (byWhite && p == 11) return true;
+        if (!byWhite && p == 5) return true;
+    }
+
+    return false;
+}
+
+static GridPos findKing(const Board& b, bool white) {
+    int kingId = white ? 11 : 5;
+    for (int r = 0; r < 8; ++r)
+        for (int c = 0; c < 8; ++c)
+            if (b[r][c] == kingId) return {r, c};
+    return {-1, -1};
+}
+
+static bool isInCheck(const Board& b, bool whiteKing) {
+    GridPos kp = findKing(b, whiteKing);
+    if (!kp.isValid()) return false;
+    return isSquareAttacked(b, kp.row, kp.col, !whiteKing);
+}
+
+// Simulate a move and check if the side that just moved left its own king in check
+static bool moveLeavesKingInCheck(const Board& b, int r1, int c1, int r2, int c2, bool whiteMoving) {
+    Board copy = b;
+    int piece = copy[r1][c1];
+    int target = copy[r2][c2];
+
+    // Handle en passant capture
+    bool isPawn = (piece == 0 || piece == 6);
+    if (isPawn && target == EMPTY_SQUARE && c1 != c2) {
+        copy[r1][c2] = EMPTY_SQUARE;
+    }
+
+    // Handle castling rook
+    bool isKing = (piece == 5 || piece == 11);
+    if (isKing && std::abs(c2 - c1) == 2) {
+        if (c2 > c1) { copy[r1][5] = copy[r1][7]; copy[r1][7] = EMPTY_SQUARE; }
+        else         { copy[r1][3] = copy[r1][0]; copy[r1][0] = EMPTY_SQUARE; }
+    }
+
+    copy[r2][c2] = piece;
+    copy[r1][c1] = EMPTY_SQUARE;
+
+    return isInCheck(copy, whiteMoving);
+}
+
+// Full castling validation
+static bool canCastle(const Board& b, bool white, bool kingside) {
+    int row = white ? 7 : 0;
+    int king = white ? 11 : 5;
+    int rook = white ? 7 : 1;
+    bool byWhite = !white;
+
+    if (b[row][4] != king) return false;
+
+    if (kingside) {
+        if (b[row][7] != rook) return false;
+        if (b[row][5] != EMPTY_SQUARE || b[row][6] != EMPTY_SQUARE) return false;
+        if (isSquareAttacked(b, row, 4, byWhite)) return false;
+        if (isSquareAttacked(b, row, 5, byWhite)) return false;
+        if (isSquareAttacked(b, row, 6, byWhite)) return false;
+    } else {
+        if (b[row][0] != rook) return false;
+        if (b[row][1] != EMPTY_SQUARE || b[row][2] != EMPTY_SQUARE ||
+            b[row][3] != EMPTY_SQUARE) return false;
+        if (isSquareAttacked(b, row, 4, byWhite)) return false;
+        if (isSquareAttacked(b, row, 3, byWhite)) return false;
+        if (isSquareAttacked(b, row, 2, byWhite)) return false;
+    }
+    return true;
+}
+
+// Does this (r1,c1)->(r2,c2) move match the piece's movement pattern and
+// respect blocking/en-passant rules? (Does not check castling or king safety.)
+static bool isValidPiecePattern(const Board& b, int r1, int c1, int r2, int c2, bool whiteToMove) {
+    int piece = b[r1][c1];
+    int kind = piece % 6;
+    int target = b[r2][c2];
+
+    // Cannot move to (let alone "capture") a square occupied by one's own piece.
+    if (whiteToMove && isWhitePiece(target)) return false;
+    if (!whiteToMove && isBlackPiece(target)) return false;
+
+    int dr = r2 - r1, dc = c2 - c1;
+
+    switch (kind) {
+        case 0: { // Pawn
+            int dir = whiteToMove ? -1 : 1;
+            int startRow = whiteToMove ? 6 : 1;
+            if (dc == 0) {
+                if (target != EMPTY_SQUARE) return false; // cannot capture straight
+                if (dr == dir) return true;
+                return (r1 == startRow && dr == 2 * dir && b[r1+dir][c1] == EMPTY_SQUARE);
             }
-        }
-        if (eated[i]>0) { // shift only if we have this exact piece
-            currentPieceTopLeftCornerXpos -= eatedAreaProperties[2]; // no overlap (side to side plot) for different pieces
-        } 
-    }
-    return 0;
-} // CORRECT
-
-std::array<int, 4> secToDigits(int n){
-    std::array<int, 4> result = {0, 0, 0, 0};
-    int mins = n / 60;
-    int secs = n % 60;
-    result[0] = mins / 10;
-    result[1] = mins % 10;
-    result[2] = secs / 10;
-    result[3] = secs % 10;
-    return result;
-}
-
-int plotClock(sf::RenderWindow& window, int secLeft, std::array<int, 4> clockAreaProperties, int clockDim, std::array<sf::Texture, 12> clockTextures){
-    int currentDigitTopLeftCornerXpos = clockAreaProperties[1];
-
-    // Draw clock
-    sf::Sprite clockSprite(clockTextures[10]);
-    clockSprite.setPosition(sf::Vector2f(static_cast<float>(currentDigitTopLeftCornerXpos), static_cast<float>(clockAreaProperties[0]))); 
-    clockSprite.setScale(sf::Vector2f(static_cast<float>(clockAreaProperties[2]) / clockDim, static_cast<float>(clockAreaProperties[2]) / clockDim));
-    window.draw(clockSprite);
-
-    currentDigitTopLeftCornerXpos += clockAreaProperties[2];
-
-    // Draw digits
-    std::array<int, 4> digitsArray = secToDigits(secLeft);
-    for (int i=0; i<4; ++i){
-        sf::Sprite digitSprite(clockTextures[digitsArray[i]]);
-        digitSprite.setPosition(sf::Vector2f(static_cast<float>(currentDigitTopLeftCornerXpos), static_cast<float>(clockAreaProperties[0]))); 
-        digitSprite.setScale(sf::Vector2f(static_cast<float>(clockAreaProperties[2]) / clockDim , static_cast<float>(clockAreaProperties[2]) / clockDim));
-        window.draw(digitSprite);
-        currentDigitTopLeftCornerXpos += clockAreaProperties[2] * 5 / 8;
-        if (i==1){
-            sf::Sprite doublePointsSprite(clockTextures[11]);
-            doublePointsSprite.setPosition(sf::Vector2f(static_cast<float>(currentDigitTopLeftCornerXpos), static_cast<float>(clockAreaProperties[0]))); 
-            doublePointsSprite.setScale(sf::Vector2f(static_cast<float>(clockAreaProperties[2]) / clockDim , static_cast<float>(clockAreaProperties[2]) / clockDim));
-            window.draw(doublePointsSprite);
-            currentDigitTopLeftCornerXpos += clockAreaProperties[2] * 3 / 8;
-        }
-    }
-    return 0;
-}
-
-std::string plotTimerButtonsLost(sf::RenderWindow& window,std::array<int, 4> widgetsAreaProperties, bool isHorizontalVar, // Window params
-    std::array<int, 6> eated_black, std::array<int, 6> eated_white, int secLeftBlack, int secLeftWhite, // Display params
-    bool* gameStatePtr, std::array<sf::Texture, 12> chessTextures, std::array<sf::Texture, 4> buttonTextures, std::array<sf::Texture, 12> clockTextures, // Textures params
-    bool mouseLeftClicked, sf::Vector2i mousePosition) // Mouse params
-{
-    // We are going to divide the space according to the shape of it, 
-    // if windows is horizontal, we divide into 7 almost equivalent horizontal pieces (white lost pieces, black timer, button 1, button 2, button 3, white timer, black lost pieces)
-    // if windows is vertical,  we divide into 3 almost equivalent horizontal pieces ((white lost pieces, black timer), (button 1, button 2, button 3), (white timer, black lost pieces))
-    // gameState is True iff not paused
-
-    std::string uciRequest = ""; // by default if nothing is clicked return empty string
-    // first we define all the sizes of the sprites in pixels so we can compute all the scaling factors later
-    // 1ST ROW:
-    int eatedWhiteImageHeight = 16;
-    int eatedWhiteImageMaximalWidth = 8.5 * eatedWhiteImageHeight;
-    int eatedWhiteImageWidth = computeEatedWidth(eated_white, eatedWhiteImageHeight);
-
-    // 2ND AND 6TH ROW:
-    int timerHeight = 8;
-    int timerWidth = 31; // 8(1 clock) + 3(1 double point) + 4*5(4 digits)
-
-    // 3RD, 4TH, 5TH ROW:
-    int buttonImageHeight = 16;
-    int buttonImageWidth = 64;
-
-    // 7TH ROW:
-    int eatedBlackImageHeight = 16;
-    int eatedBlackImageMaximalWidth = 8.5 * eatedBlackImageHeight;
-    int eatedBlackImageWidth = computeEatedWidth(eated_black, eatedBlackImageHeight);
-    if (isHorizontalVar){
-        int dividedHeight = widgetsAreaProperties[2]/7;
-        // 1ST ROW: Eated White Pieces
-        std::array<int, 4> whitePiecesAreaProperties = {0, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        // to compute the area we use the maximal width of eated pieces, so piece sizes are consistant during the game, but we plot at computed width so the pieces starts always at the same place
-        std::array<int, 4> centeredWhitePiecesAreaProperties = centerPlot(whitePiecesAreaProperties, eatedWhiteImageHeight, eatedWhiteImageMaximalWidth, 0);
-        centeredWhitePiecesAreaProperties[3] =
-            static_cast<int>(
-                static_cast<float>(eatedWhiteImageWidth)
-                * centeredWhitePiecesAreaProperties[2]
-                / eatedWhiteImageHeight
-            ); // plot with compute width and not theoritical maximum width
-        int plotWhiteEatedWorked = plotEated(window, eated_white, centeredWhitePiecesAreaProperties, true, eatedWhiteImageHeight, chessTextures);
-
-        // 2ND ROW: Black Timer
-        std::array<int, 4> blackTimerAreaProperties = {dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredBlackTimerAreaProperties = centerPlot(blackTimerAreaProperties, timerHeight, timerWidth, 2);
-        int plotTimerBlackWorked = plotClock(window, secLeftBlack, centeredBlackTimerAreaProperties, timerHeight, clockTextures);
-
-        // 3RD ROW: Pause Button
-        std::array<int, 4> pauseAreaProperties = {2 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredPlayPauseButtonProperties = centerPlot(pauseAreaProperties, buttonImageHeight, buttonImageWidth,5);
-        sf::Sprite playPauseSprite(buttonTextures[0]); // by default we load "pause" texture
-        if (!(*gameStatePtr)) { // if game is not playing we load "play" texture
-            playPauseSprite.setTexture(buttonTextures[1]);
-        }
-        playPauseSprite.setPosition(sf::Vector2f(static_cast<float>(centeredPlayPauseButtonProperties[1]), static_cast<float>(centeredPlayPauseButtonProperties[0]))); 
-        playPauseSprite.setScale(sf::Vector2f(static_cast<float>(centeredPlayPauseButtonProperties[3])/static_cast<float>(buttonImageWidth), static_cast<float>(centeredPlayPauseButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-        
-        if (checkMouseInBounds(mousePosition, centeredPlayPauseButtonProperties))
-        {
-            playPauseSprite.setPosition(sf::Vector2f(static_cast<float>(centeredPlayPauseButtonProperties[1]) - 0.05 * centeredPlayPauseButtonProperties[3], static_cast<float>(centeredPlayPauseButtonProperties[0]) - 0.05 * centeredPlayPauseButtonProperties[2])); 
-            playPauseSprite.setScale(sf::Vector2f(1.1*static_cast<float>(centeredPlayPauseButtonProperties[3])/static_cast<float>(buttonImageWidth), 1.1*static_cast<float>(centeredPlayPauseButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-            // button have 5% margin all around, so if we scale it by 1.1 there will be no leak in the surrounding area, 0.9 * 1.1 = 0.99 < 1
-            if (mouseLeftClicked){
-                uciRequest = "";
-                *gameStatePtr = !(*gameStatePtr);
+            if (std::abs(dc) == 1 && dr == dir) {
+                if (target != EMPTY_SQUARE) return true; // normal capture
+                // En passant
+                if (b[r1][c2] == (whiteToMove ? 0 : 6)) return true;
             }
+            return false;
         }
-        window.draw(playPauseSprite);
-
-        // 4TH ROW: Screenshot Button
-        std::array<int, 4> snapAreaProperties = {3 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredSnapButtonProperties = centerPlot(snapAreaProperties, buttonImageHeight, buttonImageWidth,5);
-        sf::Sprite snapSprite(buttonTextures[2]);
-        snapSprite.setPosition(sf::Vector2f(static_cast<float>(centeredSnapButtonProperties[1]), static_cast<float>(centeredSnapButtonProperties[0]))); 
-        snapSprite.setScale(sf::Vector2f(static_cast<float>(centeredSnapButtonProperties[3])/static_cast<float>(buttonImageWidth), static_cast<float>(centeredSnapButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-        
-        if (checkMouseInBounds(mousePosition, centeredSnapButtonProperties))
-        {
-            snapSprite.setPosition(sf::Vector2f(static_cast<float>(centeredSnapButtonProperties[1]) - 0.05 * centeredSnapButtonProperties[3], static_cast<float>(centeredSnapButtonProperties[0]) - 0.05 * centeredSnapButtonProperties[2])); 
-            snapSprite.setScale(sf::Vector2f(1.1*static_cast<float>(centeredSnapButtonProperties[3])/static_cast<float>(buttonImageWidth), 1.1*static_cast<float>(centeredSnapButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-            if (mouseLeftClicked){
-                sf::Texture screenshtotTexture(window.getSize());
-            screenshtotTexture.update(window);
-
-            sf::Image screenshotImage = screenshtotTexture.copyToImage();   
-            screenshotImage.saveToFile("./ScreenShots/screenshot.jpg");
-            }
-        }
-        window.draw(snapSprite);
-
-        // 5TH ROW: Reset Button
-        std::array<int, 4> resetAreaProperties = {4 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredResetButtonProperties = centerPlot(resetAreaProperties, buttonImageHeight, buttonImageWidth, 5);
-        sf::Sprite resetSprite(buttonTextures[3]);
-        resetSprite.setPosition(sf::Vector2f(static_cast<float>(centeredResetButtonProperties[1]), static_cast<float>(centeredResetButtonProperties[0]))); 
-        resetSprite.setScale(sf::Vector2f(static_cast<float>(centeredResetButtonProperties[3])/static_cast<float>(buttonImageWidth), static_cast<float>(centeredResetButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-        
-        if (checkMouseInBounds(mousePosition, centeredResetButtonProperties) )
-        {
-            resetSprite.setPosition(sf::Vector2f(static_cast<float>(centeredResetButtonProperties[1]) - 0.05 * centeredResetButtonProperties[3], static_cast<float>(centeredResetButtonProperties[0]) - 0.05 * centeredResetButtonProperties[2])); 
-            resetSprite.setScale(sf::Vector2f(1.1*static_cast<float>(centeredResetButtonProperties[3])/static_cast<float>(buttonImageWidth), 1.1*static_cast<float>(centeredResetButtonProperties[2])/static_cast<float>(buttonImageHeight)));
-            if (mouseLeftClicked) {
-                uciRequest = "ucinewgame";
-            }
-        }
-        window.draw(resetSprite);
-
-        // 6TH ROW: White Timer
-        std::array<int, 4> whiteTimerAreaProperties = {5 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredWhiteTimerAreaProperties = centerPlot(whiteTimerAreaProperties, timerHeight, timerWidth, 2);
-        int plotTimerWhiteWorked = plotClock(window, secLeftWhite, centeredWhiteTimerAreaProperties, timerHeight, clockTextures);
-
-        // 7TH ROW: Eated Black Pieces
-        std::array<int, 4> blackPiecesAreaProperties = {6 * dividedHeight, widgetsAreaProperties[1], dividedHeight, widgetsAreaProperties[3]};
-        std::array<int, 4> centeredBlackPiecesAreaProperties = centerPlot(blackPiecesAreaProperties, eatedBlackImageHeight, eatedBlackImageMaximalWidth, 0);
-        centeredBlackPiecesAreaProperties[3] =
-            static_cast<int>(
-                static_cast<float>(eatedBlackImageWidth)
-                * centeredBlackPiecesAreaProperties[2]
-                / eatedBlackImageHeight
-            ); // plot with compute width and not theoritical maximum width
-        int plotBlackEatedWorked = plotEated(window, eated_black, centeredBlackPiecesAreaProperties, false, eatedBlackImageHeight, chessTextures);
-    }
-    return uciRequest;
-}
-
-std::array<int, 2> plotChessBoard(sf::RenderWindow& window, std::array<int, 4> boardAreaProperties, // Window params
-    std::array<std::array<int, 8>, 8> chessboard, std::array<int, 2> selectedSquare, int elapsedSinceLaunchMilli, // Chess board param
-    std::array<sf::Color, 2> colors, int pieceDim, std::array<sf::Texture, 12> chessTextures, std::array<sf::Texture, 2> selectedTexture,// textures params
-    bool mouseLeftClicked, sf::Vector2i mousePosition) // Mouse params
-{
-    std::array<int, 2> mouseInGridLoc = {-1,-1}; // this variable is the returned one, it contains the coordinates (x,y) in the board €[0, 7]²u{-1}², if mouse is outside board we return {-1, -1}
-    std::array<int, 8> casesSides = squareInScreen(boardAreaProperties[2]); // biggest square dimensions we can plot in the area (we give the width(=height) of the board area)
-    // the two next variables define the location of the top left corner of the current chess board case
-    int currentIpos = 0;
-    int currentJpos = 0;
-
-    bool mouseInCurrentSquare = false;
-    for (int i = 0; i < 8; ++i) {
-        int currentIlength = casesSides[i];
-        currentJpos = 0;
-        for (int j = 0; j < 8; ++j) {
-            mouseInCurrentSquare = false;
-            int currentJlength = casesSides[j];
-            // CHECK IF MOUSE IS IN THE CURRENT SQUARE (if so there will be change in square display)
-            std::array<int, 4> currentSquareAreaProperties = {currentIpos, currentJpos, currentIlength, currentJlength};
-            if (checkMouseInBounds(mousePosition, currentSquareAreaProperties))
+        case 1: // Rook
+            if ((dr != 0) == (dc != 0)) return false; // not on a straight line
             {
-                mouseInGridLoc = {i, j};
-                mouseInCurrentSquare = true;
+                int sr = (dr == 0) ? 0 : (dr > 0 ? 1 : -1);
+                int sc = (dc == 0) ? 0 : (dc > 0 ? 1 : -1);
+                int steps = std::max(std::abs(dr), std::abs(dc));
+                for (int d = 1; d < steps; ++d)
+                    if (b[r1+sr*d][c1+sc*d] != EMPTY_SQUARE) return false;
             }
+            return true;
+        case 2: // Knight
+            return (std::abs(dr) == 2 && std::abs(dc) == 1) ||
+                   (std::abs(dr) == 1 && std::abs(dc) == 2);
+        case 3: // Bishop
+            if (std::abs(dr) != std::abs(dc) || dr == 0) return false;
+            {
+                int sr = dr > 0 ? 1 : -1, sc = dc > 0 ? 1 : -1;
+                for (int d = 1; d < std::abs(dr); ++d)
+                    if (b[r1+sr*d][c1+sc*d] != EMPTY_SQUARE) return false;
+            }
+            return true;
+        case 4: // Queen
+            if (dr == 0 || dc == 0) {
+                if (dr == 0 && dc == 0) return false;
+                int sr = (dr == 0) ? 0 : (dr > 0 ? 1 : -1);
+                int sc = (dc == 0) ? 0 : (dc > 0 ? 1 : -1);
+                int steps = std::max(std::abs(dr), std::abs(dc));
+                for (int d = 1; d < steps; ++d)
+                    if (b[r1+sr*d][c1+sc*d] != EMPTY_SQUARE) return false;
+            } else if (std::abs(dr) == std::abs(dc)) {
+                int sr = dr > 0 ? 1 : -1, sc = dc > 0 ? 1 : -1;
+                for (int d = 1; d < std::abs(dr); ++d)
+                    if (b[r1+sr*d][c1+sc*d] != EMPTY_SQUARE) return false;
+            } else {
+                return false;
+            }
+            return true;
+        case 5: // King
+            if (std::abs(dr) <= 1 && std::abs(dc) <= 1 && (dr != 0 || dc != 0)) return true;
+            return (dr == 0 && std::abs(dc) == 2 && canCastle(b, whiteToMove, dc > 0));
+    }
+    return false;
+}
 
-            // PRINT THE BACKGROUND
-            // Create the rectangle shape (Width <-> j, Height <-> i)
-            sf::RectangleShape caseRect(sf::Vector2f(static_cast<float>(currentJlength), static_cast<float>(currentIlength)));
-            int colorIdx = (i+j) % 2; // 0: white case, 1: black case
-            
-            // Customize the rectangle
-            caseRect.setFillColor(colors[colorIdx]); // case color
-            caseRect.setPosition(sf::Vector2f(static_cast<float>(currentJpos), static_cast<float>(currentIpos)));  
+// Validate a full move (piece pattern, castling legality, leaving king in check)
+static bool isMoveLegal(const Board& b, const std::string& uci) {
+    if (uci.length() < 4) return false;
+    int c1 = uci[0] - 'a';
+    int r1 = 7 - (uci[1] - '1');
+    int c2 = uci[2] - 'a';
+    int r2 = 7 - (uci[3] - '1');
+    int piece = b[r1][c1];
+    if (piece == EMPTY_SQUARE) return false;
+    bool whiteMoving = isWhitePiece(piece);
 
-            // Draw the rectangle
-            window.draw(caseRect);
+    if (!isValidPiecePattern(b, r1, c1, r2, c2, whiteMoving)) return false;
+    if (moveLeavesKingInCheck(b, r1, c1, r2, c2, whiteMoving)) return false;
+    return true;
+}
 
-            // PRINT THE CHESS PIECE
-            if (chessboard[i][j] != 12){ // if case is not empty
-                sf::Sprite pieceSprite(chessTextures[chessboard[i][j]]);
+// Check if the side to move has any legal move
+static bool hasLegalMove(const Board& b, bool whiteToMove) {
+    for (int r1 = 0; r1 < 8; ++r1) {
+        for (int c1 = 0; c1 < 8; ++c1) {
+            int p = b[r1][c1];
+            if (p == EMPTY_SQUARE) continue;
+            bool pWhite = isWhitePiece(p);
+            if (pWhite != whiteToMove) continue;
 
-                if (mouseInCurrentSquare){ // scale up the piece if hovered
-                    pieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos) - 0.05 * currentJlength , static_cast<float>(currentIpos) - 0.05 * currentIlength));
-                    // this strange 0.05 is simply (1.1-1)/2, we ensure to recenter piece in the square when scaling it up, if not done the scaling will be in the right and bottom directions
-                    pieceSprite.setScale(sf::Vector2f(1.1*currentJlength/static_cast<float>(pieceDim), 1.1*currentIlength/static_cast<float>(pieceDim)));
-                    // pieces are 14x14 pixels maximum in a 16x16 texture image, so if we scale it by 1.1 there will be no leak in the surrounding squares, 1.1*14/16 < 1
+            for (int r2 = 0; r2 < 8; ++r2) {
+                for (int c2 = 0; c2 < 8; ++c2) {
+                    if (r1 == r2 && c1 == c2) continue;
+                    if (!isValidPiecePattern(b, r1, c1, r2, c2, whiteToMove)) continue;
+                    if (moveLeavesKingInCheck(b, r1, c1, r2, c2, whiteToMove)) continue;
+                    return true; // Found at least one legal move
                 }
-                else{
-                    pieceSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos), static_cast<float>(currentIpos)));
-                    pieceSprite.setScale(sf::Vector2f(currentJlength/static_cast<float>(pieceDim), currentIlength/static_cast<float>(pieceDim)));
-                }
-                window.draw(pieceSprite);
             }
-
-            // IF CASE IS SELECTED DISPLAY "SELECTED" ANIMATION
-            if ((!twoIntsArrayCheck(selectedSquare, std::array<int, 2> {-1,-1}) ) && (selectedSquare[0]==i) && (selectedSquare[1]==j) && ( (elapsedSinceLaunchMilli%1000) < 500)){ // if a square is selected (last condition is for flickering)
-                sf::Sprite selectedSprite(selectedTexture[colorIdx]);
-                selectedSprite.setPosition(sf::Vector2f(static_cast<float>(currentJpos), static_cast<float>(currentIpos)));
-                selectedSprite.setScale(sf::Vector2f(currentJlength/static_cast<float>(pieceDim), currentIlength/static_cast<float>(pieceDim)));
-                window.draw(selectedSprite);
-            }
-
-            currentJpos += currentJlength;
         }
-        currentIpos += currentIlength;
     }
-    return mouseInGridLoc; 
+    return false;
 }
 
-void plotTerminal(sf::RenderWindow& window, std::array<int, 4> terminalAreaProperties,
-    std::string command,
-    sf::Font myFont){
-    // BLACK BACKGROUND
-    sf::RectangleShape terminalRect(sf::Vector2f(static_cast<float>(terminalAreaProperties[3]), static_cast<float>(terminalAreaProperties[2])));
-    terminalRect.setFillColor(sf::Color{0x000000FF}); // case color
-    terminalRect.setPosition(sf::Vector2f(static_cast<float>(terminalAreaProperties[1]), static_cast<float>(terminalAreaProperties[0])));  
-    window.draw(terminalRect);
-
-    // TEXT
-    int fontHeight = static_cast<int>(0.80 * terminalAreaProperties[2]);
-    int fontMargin = (terminalAreaProperties[2] - fontHeight)/2;
-
-    sf::Text text(myFont, command, fontHeight);
-
-    text.setFillColor(sf::Color(31, 255, 0));
-    text.setPosition(sf::Vector2f(static_cast<float>(terminalAreaProperties[1] + fontMargin), static_cast<float>(terminalAreaProperties[0]) + fontMargin));
-    window.draw(text);
+static bool isCheckmate(const Board& b, bool whiteToMove) {
+    return isInCheck(b, whiteToMove) && !hasLegalMove(b, whiteToMove);
 }
 
-int main()
-{
-    //Loading all the textures : 
-    std::array<sf::Texture, 12> chessTextures;
-    chessTextures[0].loadFromFile("./Assets/Pieces/Black/Pawn.png");
-    chessTextures[1].loadFromFile("./Assets/Pieces/Black/Rook.png");
-    chessTextures[2].loadFromFile("./Assets/Pieces/Black/Knight.png");
-    chessTextures[3].loadFromFile("./Assets/Pieces/Black/Bishop.png");
-    chessTextures[4].loadFromFile("./Assets/Pieces/Black/Queen.png");
-    chessTextures[5].loadFromFile("./Assets/Pieces/Black/King.png");
-    chessTextures[6].loadFromFile("./Assets/Pieces/White/Pawn.png");
-    chessTextures[7].loadFromFile("./Assets/Pieces/White/Rook.png");
-    chessTextures[8].loadFromFile("./Assets/Pieces/White/Knight.png");
-    chessTextures[9].loadFromFile("./Assets/Pieces/White/Bishop.png");
-    chessTextures[10].loadFromFile("./Assets/Pieces/White/Queen.png");
-    chessTextures[11].loadFromFile("./Assets/Pieces/White/King.png");
+static bool isStalemate(const Board& b, bool whiteToMove) {
+    return !isInCheck(b, whiteToMove) && !hasLegalMove(b, whiteToMove);
+}
 
-    std::array<sf::Texture, 4> buttonTextures;
-    buttonTextures[0].loadFromFile("./Assets/Buttons/Pause.png");
-    buttonTextures[1].loadFromFile("./Assets/Buttons/Play.png");
-    buttonTextures[2].loadFromFile("./Assets/Buttons/Snap.png");
-    buttonTextures[3].loadFromFile("./Assets/Buttons/Reset.png");
+// Sound generation
+static sf::SoundBuffer generateTone(float frequency, int durationMs, float amplitude = 0.5f) {
+    const unsigned int sampleRate = 44100;
+    auto numSamples = static_cast<std::uint64_t>(sampleRate * durationMs / 1000);
+    std::vector<std::int16_t> samples(numSamples);
+    for (std::uint64_t i = 0; i < numSamples; ++i) {
+        float t = static_cast<float>(i) / sampleRate;
+        float envelope = 1.0f - static_cast<float>(i) / numSamples;
+        samples[i] = static_cast<std::int16_t>(
+            amplitude * 32767.f * envelope *
+            std::sin(2.0f * 3.14159265f * frequency * t));
+    }
+    std::vector<sf::SoundChannel> ch = {sf::SoundChannel::Mono};
+    sf::SoundBuffer buf(samples.data(), numSamples, 1, sampleRate, ch);
+    return buf;
+}
 
-    std::array<sf::Texture, 12> clockTextures;
-    clockTextures[0].loadFromFile("./Assets/Clock/Zero.png");
-    clockTextures[1].loadFromFile("./Assets/Clock/One.png");
-    clockTextures[2].loadFromFile("./Assets/Clock/Two.png");
-    clockTextures[3].loadFromFile("./Assets/Clock/Three.png");
-    clockTextures[4].loadFromFile("./Assets/Clock/Four.png");
-    clockTextures[5].loadFromFile("./Assets/Clock/Five.png");
-    clockTextures[6].loadFromFile("./Assets/Clock/Six.png");
-    clockTextures[7].loadFromFile("./Assets/Clock/Seven.png");
-    clockTextures[8].loadFromFile("./Assets/Clock/Eight.png");
-    clockTextures[9].loadFromFile("./Assets/Clock/Nine.png");
-    clockTextures[10].loadFromFile("./Assets/Clock/Clock.png");
-    clockTextures[11].loadFromFile("./Assets/Clock/DoublePoints.png");
+// Font loading (cross-platform fallback chain)
+static sf::Font loadFontCrossPlatform() {
+    const char* paths[] = {
+        // Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        // macOS
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+        "/Library/Fonts/Arial.ttf",
+        // Windows
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        // Relative (user can bundle a font)
+        "./Assets/Font.ttf",
+        "./font.ttf",
+    };
+    for (const char* p : paths) {
+        sf::Font f;
+        if (f.openFromFile(p)) return f;
+    }
+    std::cerr << "Warning: no font found — PV text will not be displayed.\n";
+    return {};
+}
 
-    std::array<sf::Texture, 2> selectedTexture;
-    selectedTexture[0].loadFromFile("./Assets/Pieces/SelectedWhiteSquare.png");
-    selectedTexture[1].loadFromFile("./Assets/Pieces/SelectedBlackSquare.png");
+int main(int argc, char* argv[]) {
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
-    std::array<sf::Color, 2> colors = {sf::Color{0xEBECD0FF}, sf::Color{0x779556FF}}; // white and black chess squares colors RGB hex code
-
-    sf::Font myFont;
-    bool fontLoadedBool = myFont.openFromFile("./Assets/Font/arial.ttf");
-    if (!fontLoadedBool)
-    {
-        std::cout << "WARNING THE FONT CAN NOT BE FIND AN ERROR HAS OCCURED DURING LOADING" << std::endl;
+    // --- Usage ---
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0]
+                  << " <engine_path> [white|black] [skill_level]"
+                     " s=<engine_minutes> h=<human_minutes>\n"
+                  << "  e.g. " << argv[0] << " ./stockfish\n"
+                  << "  e.g. " << argv[0] << " ./stockfish black\n"
+                  << "  e.g. " << argv[0] << " ./stockfish black 8\n"
+                  << "  e.g. " << argv[0] << " ./stockfish black 8 s=5 h=10\n"
+                  << "  white|black : color the human plays (default white)\n"
+                  << "  skill_level : 0 (weak) ... 20 (strongest, default 20)\n"
+                  << "  s=<min>     : engine clock in minutes (default 20)\n"
+                  << "  h=<min>     : human clock in minutes (default = engine)\n";
+        return 1;
     }
 
+    const char* enginePath = argv[1];
+    int humanColor = 0; // 0 = human plays white
+    int skillLevel = 20;
+    int engineMinutes = 20;
+    int humanMinutes = -1; // -1 => default to engineMinutes
 
-    // - Window configuration
-    sf::RenderWindow window(sf::VideoMode({WIDTH, HEIGHT}), "Chess Board");
-    window.setFramerateLimit(30);
-    window.clear(sf::Color(0xEBECD0FF));
-    // -- Define if screen will be vertical or horizontal
-    bool isScreenHorizontal = isHorizontal(HEIGHT, WIDTH);
-    // -- Split screen according to its shape
-    std::array<int, 4> boardAreaProperties;
-    std::array<int, 4> terminalAreaProperties;
-    std::array<int, 4> widgetsAreaProperties;
-    if (isScreenHorizontal){ // for better understanding look at "screenWidgetPlacement.txt"
-        int boardSide = static_cast<int>(0.95 * HEIGHT);
-        boardAreaProperties = {0, 0, boardSide, boardSide}; // (y, x, h, w)
-        terminalAreaProperties = {boardSide, 0, HEIGHT - boardSide, boardSide};
-        widgetsAreaProperties = {0, boardSide,  HEIGHT, WIDTH - boardSide};
+    for (int i = 2; i < argc; ++i) {
+        std::string a = argv[i];
+        long v;
+        if (a == "white" || a == "0")                 humanColor = 0;
+        else if (a == "black" || a == "1")            humanColor = 1;
+        else if (a.compare(0, 2, "s=") == 0) {
+            v = std::stol(a.substr(2));
+            if (v < 1) v = 1;
+            engineMinutes = static_cast<int>(v);
+        }
+        else if (a.compare(0, 2, "h=") == 0) {
+            v = std::stol(a.substr(2));
+            if (v < 1) v = 1;
+            humanMinutes = static_cast<int>(v);
+        }
+        else {
+            v = std::stol(a);
+            if (v < 0) v = 0;
+            if (v > 20) v = 20;
+            skillLevel = static_cast<int>(v);
+        }
     }
-    else {
-        int eigthOfLeftHeight = static_cast<int>(0.125 * (HEIGHT - WIDTH));
-        boardAreaProperties = {0, 0, WIDTH, WIDTH}; // (y, x, h, w)
-        terminalAreaProperties = {WIDTH, 0, eigthOfLeftHeight, WIDTH};
-        widgetsAreaProperties = {WIDTH + eigthOfLeftHeight, 0,  HEIGHT - eigthOfLeftHeight - WIDTH, WIDTH};
+
+    if (humanMinutes < 0) humanMinutes = engineMinutes;
+
+    // --- Load textures ---
+    TextureManager textures;
+    if (!textures.loadAll()) {
+        std::cerr << "Failed to load textures." << std::endl;
+        return 1;
     }
 
+    // --- Start engine ---
+    EngineType engineType = EngineType::UCI;
+    auto engine = createEngine(engineType);
+    bool engineAvailable = engine->start(enginePath);
+    if (!engineAvailable)
+        std::cerr << "Engine '" << enginePath << "' not found — local play mode." << std::endl;
+    else
+        engine->setSkillLevel(skillLevel);
 
-    // Variables init
-    bool mouseLeftPressed = false;
-    bool mouseLeftPressedPrevious = false;
-    bool mouseLeftClicked = false;
-    sf::Clock clock; // we start a timer for flickering textures
+    // --- Font ---
+    sf::Font font = loadFontCrossPlatform();
 
-    std::array<int, 2> selectedSquare = {-1,-1};
+    // --- Sounds ---
+    sf::SoundBuffer checkBuf     = generateTone(880.f, 250, 0.9f);
+    sf::SoundBuffer mateBuf      = generateTone(220.f, 800, 0.9f);
+    sf::SoundBuffer stalemateBuf = generateTone(330.f, 400, 0.9f);
+    sf::Sound soundCheck(checkBuf);
+    sf::Sound soundMate(mateBuf);
+    sf::Sound soundStalemate(stalemateBuf);
 
-    std::string terminalLog = "> Hello world!";
-    std::string uciRequest = "";
-    std::string uciRequestButtons = "";
-    std::string uciRequestBoard = "";
+    // --- Window ---
+    std::string title = "Chess";
+    if (engineAvailable)
+        title += " - " + engine->name() + " niveau " + std::to_string(skillLevel);
+    sf::RenderWindow window(sf::VideoMode({WINDOW_WIDTH, WINDOW_HEIGHT}), title);
+    window.setFramerateLimit(MAX_FPS);
 
-    while (window.isOpen())
-    {
-        while (const std::optional event = window.pollEvent())
-        {
-            if (event->is<sf::Event::Closed>())
+    // --- Game state ---
+    Board board = INITIAL_BOARD;
+    CapturedPieces capturedBlack = {0};
+    CapturedPieces capturedWhite = {0};
+    int whiteMinutes = (humanColor == 0) ? humanMinutes : engineMinutes;
+    int blackMinutes = (humanColor == 1) ? humanMinutes : engineMinutes;
+    int secLeftWhite = whiteMinutes * 60;
+    int secLeftBlack = blackMinutes * 60;
+
+    bool gameRunning = true;
+    bool engineThinking = false;
+    bool clockStarted = false;
+    GridPos selectedSquare;
+    std::vector<std::string> moveHistory;
+
+    bool mousePressed = false;
+    bool mousePrevPressed = false;
+    sf::Clock flickerClock;
+    sf::Clock gameClock;
+    float clockAccum = 0.f;
+    std::string statusText;
+
+    // If human plays black, let engine move first
+    if (humanColor == 1 && engineAvailable) {
+        engine->go();
+        engineThinking = true;
+    }
+
+    while (window.isOpen()) {
+        while (const auto event = window.pollEvent()) {
+            if (event->is<sf::Event::Closed>()) {
+                soundCheck.stop();
+                soundMate.stop();
+                soundStalemate.stop();
                 window.close();
-        }
-        // [0] RESET WINDOWS
-        window.clear(sf::Color(0xEBECD0FF));
-
-        // [1] GETTING THE USER INPUT
-        mouseLeftPressedPrevious = mouseLeftPressed;
-        mouseLeftPressed = (sf::Mouse::isButtonPressed(sf::Mouse::Button::Left)); // mouse is pressed means the button is currently pressed
-        mouseLeftClicked = (mouseLeftPressed && !mouseLeftPressedPrevious); // mouse is clicked if it is the first frame from all the consecutives pressed frame in other words we look for rising edge, we want to trigger button interaction only once
-        // raising edge detection is max(0, f'(x)) and falling edge max(0, -f'(x)) but here we express it with boolean and a memory
-        sf::Vector2i mousePosition = sf::Mouse::getPosition(window); // get in screen mouse position
-
-        // [2] DISPLAY THE TERMINAL
-        if (fontLoadedBool) {
-            plotTerminal(window, terminalAreaProperties, terminalLog, myFont);
+            }
         }
 
-        // [2] DISPLAY THE GRID
-        sf::Time elapsedSinceLaunch = clock.getElapsedTime(); // we compute elapsed time and pass it for chessboard display
-        int elapsedSinceLaunchMilli = 2 * elapsedSinceLaunch.asMilliseconds(); // we can multiply to make it flicker faster, if no multiplier -> flicker every sec, if multiplied by 3 -> flicker 3 times per sec
-        std::array<int, 2> mouseInGridLoc = plotChessBoard(window, boardAreaProperties, chessboard, selectedSquare, elapsedSinceLaunchMilli, colors, 16, chessTextures, selectedTexture, mouseLeftClicked, mousePosition);
-        // mouseInGridLoc is (x,y) y positive is toward bottom
-        // now we will use this to update game, if mouse pressed and cliked square is different of the selected one we set a uci request for the movement else if it is the same, we unselect the square, else if clicked on {-1,-1} do nothing
-        uciRequestBoard = "";
-        if (!twoIntsArrayCheck(mouseInGridLoc, std::array<int, 2> {-1,-1}) && mouseLeftClicked){ 
-            if (twoIntsArrayCheck(selectedSquare, std::array<int, 2> {-1,-1})){ // if nothing selected :
-                if (chessboard[mouseInGridLoc[0]][mouseInGridLoc[1]] != 12){ // and if square contains a piece :
-                    selectedSquare = mouseInGridLoc; 
-                    sf::Time voidVariable = clock.restart(); // we reset clock so the flickering is don't start at random time
+        window.clear(COLOR_LIGHT_SQUARE);
+
+        // --- Input ---
+        mousePrevPressed = mousePressed;
+        mousePressed = sf::Mouse::isButtonPressed(sf::Mouse::Button::Left);
+        bool mouseClicked = mousePressed && !mousePrevPressed;
+        sf::Vector2i mousePos = sf::Mouse::getPosition(window);
+        InputState input{mouseClicked, mousePos};
+
+        // --- Game clock (ticks for the side to move, even during engine thinking) ---
+        sf::Time gameDt = gameClock.restart();
+        if (gameRunning && clockStarted) {
+            clockAccum += gameDt.asSeconds();
+            while (clockAccum >= 1.f) {
+                clockAccum -= 1.f;
+                bool whiteToMove = (moveHistory.size() % 2 == 0);
+                if (whiteToMove) secLeftWhite--;
+                else             secLeftBlack--;
+                if (secLeftWhite < 0) secLeftWhite = 0;
+                if (secLeftBlack < 0) secLeftBlack = 0;
+            }
+
+            // Flag fall: time forfeit
+            if (secLeftWhite == 0 || secLeftBlack == 0) {
+                soundMate.play();
+                if (secLeftWhite == 0 && secLeftBlack == 0)
+                    statusText = "Draw - both flagged!";
+                else if (secLeftWhite == 0)
+                    statusText = "White flag! Black wins.";
+                else
+                    statusText = "Black flag! White wins.";
+                gameRunning = false;
+                engineThinking = false;
+            }
+        }
+
+        // --- Poll engine (always, even when paused, so we don't miss bestmove) ---
+        if (engineThinking && engineAvailable) {
+            std::string engineMove = engine->poll();
+            if (!engineMove.empty()) {
+                applyUCIMove(board, engineMove, capturedWhite, capturedBlack);
+                moveHistory.push_back(engineMove);
+                clockStarted = true;
+                engineThinking = false;
+
+                // Check / checkmate / stalemate after engine move
+                bool whiteToMove = (moveHistory.size() % 2 == 0);
+                if (isCheckmate(board, whiteToMove)) {
+                    soundMate.play();
+                    statusText = (whiteToMove ? "White" : "Black") + std::string(" is checkmated!");
+                } else if (isInCheck(board, whiteToMove)) {
+                    soundCheck.play();
+                    statusText = (whiteToMove ? "White" : "Black") + std::string(" is in check!");
+                } else if (isStalemate(board, whiteToMove)) {
+                    soundStalemate.play();
+                    statusText = "Stalemate!";
+                } else {
+                    statusText.clear();
                 }
             }
-            else{ // else something is selected and :
-                if (twoIntsArrayCheck(selectedSquare, mouseInGridLoc)) {
+        }
+
+        // --- Board interaction (only if game running and not engine's turn) ---
+        sf::Time elapsed = flickerClock.getElapsedTime();
+        int elapsedMillis = 2 * elapsed.asMilliseconds();
+
+        bool whiteToMove = (moveHistory.size() % 2 == 0);
+        bool isHumanTurn = gameRunning && !engineThinking &&
+            (engineAvailable
+                ? ((humanColor == 0 && whiteToMove) || (humanColor == 1 && !whiteToMove))
+                : true); // local play: both sides are human
+
+        std::string boardMove;
+        GridPos clickedSquare;
+        {
+            DisplayState state{board, selectedSquare, elapsedMillis,
+                               capturedBlack, capturedWhite,
+                               secLeftBlack, secLeftWhite, gameRunning};
+            clickedSquare = renderChessBoard(
+                window, WINDOW_WIDTH, BOARD_AREA_HEIGHT, state, textures, input);
+        }
+
+        if (clickedSquare.isValid() && mouseClicked && isHumanTurn) {
+            if (!selectedSquare.isValid()) {
+                int piece = board[clickedSquare.row][clickedSquare.col];
+                bool isWhitePiece = (piece >= 6 && piece <= 11);
+                bool isBlackPiece = (piece >= 0 && piece <= 5);
+                if ((humanColor == 0 && isWhitePiece) ||
+                    (humanColor == 1 && isBlackPiece) ||
+                    (!engineAvailable)) { // local play: any piece
+                    selectedSquare = clickedSquare;
+                    flickerClock.restart();
+                }
+            } else {
+                if (selectedSquare == clickedSquare) {
+                    selectedSquare = {-1, -1};
+                } else {
+                    boardMove = std::to_string(selectedSquare.row) + "_" +
+                                std::to_string(selectedSquare.col) + "_to_" +
+                                std::to_string(clickedSquare.row) + "_" +
+                                std::to_string(clickedSquare.col);
                     selectedSquare = {-1, -1};
                 }
-                else {
-                    uciRequestBoard = std::to_string(selectedSquare[0]) + "_" + std::to_string(selectedSquare[1]) + "_to_" + std::to_string(mouseInGridLoc[0]) + "_" + std::to_string(mouseInGridLoc[1]);
-                    selectedSquare = {-1, -1}; // !!!TODO!!! HERE WE WOULD NEED TO CHECK IF THE MOVE IS LEGIT TO RESET SELECTION (we can do the reset outside this if-else, for example if the chess engine returns that the move was played??)
+            }
+        }
+
+        // --- Side panel (buttons, clocks, captured pieces) ---
+        std::string buttonAction;
+        {
+            DisplayState state{board, selectedSquare, elapsedMillis,
+                               capturedBlack, capturedWhite,
+                               secLeftBlack, secLeftWhite, gameRunning};
+            buttonAction = renderSidePanel(
+                window, BOARD_AREA_HEIGHT, WINDOW_WIDTH,
+                state, gameRunning, textures, input);
+
+            // Handle reset
+            if (buttonAction == "ucinewgame") {
+                board = INITIAL_BOARD;
+                capturedBlack = {0};
+                capturedWhite = {0};
+                secLeftBlack = blackMinutes * 60;
+                secLeftWhite = whiteMinutes * 60;
+                moveHistory.clear();
+                selectedSquare = {-1, -1};
+                engineThinking = false;
+                clockStarted = false;
+                statusText.clear();
+                if (engineAvailable) {
+                    engine->newGame();
+                    if (humanColor == 1) {
+                        engine->go();
+                        engineThinking = true;
+                    }
                 }
             }
         }
 
-        // [3] DISPLAY THE SIDE-GUI (eated pieces, button and clock)
-        uciRequestButtons = plotTimerButtonsLost(window, widgetsAreaProperties, isScreenHorizontal, eated_black, eated_white, secLeftBlack, secLeftWhite, &gameState, chessTextures, buttonTextures, clockTextures, mouseLeftClicked, mousePosition); // for the moment no clock displayed secLeftBlack and secLeftWhite are thus useless
-        
-        // [4] UPDATE SCREEN
+        // --- Send human move to engine ---
+        if (!boardMove.empty() && isHumanTurn) {
+            std::string uciMove = guiMoveToUCI(boardMove, board);
+            if (!uciMove.empty() && isMoveLegal(board, uciMove)) {
+                applyUCIMove(board, uciMove, capturedWhite, capturedBlack);
+                moveHistory.push_back(uciMove);
+                clockStarted = true;
+
+                // Check / checkmate / stalemate after human move
+                bool wtm = (moveHistory.size() % 2 == 0);
+                if (isCheckmate(board, wtm)) {
+                    soundMate.play();
+                    statusText = (wtm ? "White" : "Black") + std::string(" is checkmated!");
+                } else if (isInCheck(board, wtm)) {
+                    soundCheck.play();
+                    statusText = (wtm ? "White" : "Black") + std::string(" is in check!");
+                } else if (isStalemate(board, wtm)) {
+                    soundStalemate.play();
+                    statusText = "Stalemate!";
+                } else {
+                    statusText.clear();
+                }
+
+                if (engineAvailable) {
+                    engine->sendHumanMove(uciMove);
+                    engine->go();
+                    engineThinking = true;
+                }
+            }
+        }
+
+        // --- PV zone (below the board) ---
+        {
+            std::string pv = engineAvailable ? engine->lastPV() : "";
+            renderPVZone(window, WINDOW_WIDTH, BOARD_AREA_HEIGHT,
+                         PV_ZONE_HEIGHT, pv, font, statusText);
+        }
+
+        // --- Screenshot (after full render) ---
+        if (buttonAction == "__screenshot__") {
+            sf::Texture screenshotTex(window.getSize());
+            screenshotTex.update(window);
+            sf::Image img = screenshotTex.copyToImage();
+            std::time_t now = std::time(nullptr);
+            std::tm* t = std::localtime(&now);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "./ScreenShots/screenshot_%04d%02d%02d_%02d%02d%02d.jpg",
+                          t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                          t->tm_hour, t->tm_min, t->tm_sec);
+            (void)img.saveToFile(buf);
+        }
+
         window.display();
-        // std::cout << "left click : " << mouseLeftClicked << " and mouse global position : " << mousePosition.x << ", " <<mousePosition.y << " and mouse in grid location :" << mouseInGridLoc[0] << ", " << mouseInGridLoc[1]<< std::endl;
-        if (uciRequest != "") std::cout << uciRequest << std::endl;
-
-        // [5] CALL THE CHESS ENGINE IF THERE IS AN USER INPUT
-        if (uciRequestBoard != ""){
-            uciRequest = uciRequestBoard;
-        }
-        else{
-            uciRequest = uciRequestButtons;
-        }
-
-        if (uciRequest != ""){
-            terminalLog = "client > " + uciRequest;
-        }
-
-        // Here : Have Fun with the Lib
-    
     }
+
+    engine->stop();
+    return 0;
 }
