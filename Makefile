@@ -43,7 +43,7 @@ endif
 #  macOS
 # ===========================================================================
 ifeq ($(OS_GROUP),macos)
-    SFML_DIR ?= /Users/arch/Downloads/SFML-3.1.0
+    SFML_DIR ?= /Users/Username/Downloads/SFML-3.1.0
     TARGET = main
     CXXFLAGS += -I$(SFML_DIR)/include
     LDFLAGS = -L$(SFML_DIR)/lib -Wl,-rpath,$(SFML_DIR)/lib

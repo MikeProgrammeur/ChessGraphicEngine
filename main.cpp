@@ -444,8 +444,8 @@ int main(int argc, char* argv[]) {
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         long v;
-        if (a == "white" || a == "0")                 humanColor = 0;
-        else if (a == "black" || a == "1")            humanColor = 1;
+        if (a == "white")                             humanColor = 0;
+        else if (a == "black")                        humanColor = 1;
         else if (a.compare(0, 2, "s=") == 0) {
             v = std::stol(a.substr(2));
             if (v < 1) v = 1;
@@ -588,12 +588,16 @@ int main(int argc, char* argv[]) {
                 if (isCheckmate(board, whiteToMove)) {
                     soundMate.play();
                     statusText = (whiteToMove ? "White" : "Black") + std::string(" is checkmated!");
+                    gameRunning = false;
+                    engineThinking = false;
                 } else if (isInCheck(board, whiteToMove)) {
                     soundCheck.play();
                     statusText = (whiteToMove ? "White" : "Black") + std::string(" is in check!");
                 } else if (isStalemate(board, whiteToMove)) {
                     soundStalemate.play();
                     statusText = "Stalemate!";
+                    gameRunning = false;
+                    engineThinking = false;
                 } else {
                     statusText.clear();
                 }
@@ -689,12 +693,14 @@ int main(int argc, char* argv[]) {
                 if (isCheckmate(board, wtm)) {
                     soundMate.play();
                     statusText = (wtm ? "White" : "Black") + std::string(" is checkmated!");
+                    gameRunning = false;
                 } else if (isInCheck(board, wtm)) {
                     soundCheck.play();
                     statusText = (wtm ? "White" : "Black") + std::string(" is in check!");
                 } else if (isStalemate(board, wtm)) {
                     soundStalemate.play();
                     statusText = "Stalemate!";
+                    gameRunning = false;
                 } else {
                     statusText.clear();
                 }
