@@ -36,6 +36,7 @@ Call example on windows : ./main.exe D:/stockfish/stockfish-windows-x86-64-avx2.
  - Stop timer when checkmate
 ### New features
  - Show reachable squares when a piece is selected
+ - Texture packs
 
 
 # MY Retro CHess♟️(🇫🇷 English Version)
@@ -75,3 +76,4 @@ Exemple d'appel du programme sur windows : ./main.exe D:/stockfish/stockfish-win
  - Arrêter le temps quand il y a échec et mat.
 ### Nouvelles fonctionnalités
  - Montrer les cases accessibles quand une pièce est sélectionnée
+ - Packs de textures
